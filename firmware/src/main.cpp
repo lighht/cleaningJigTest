@@ -1,41 +1,38 @@
-
 #include <Arduino.h>
-/******PRINTING PARAMS****************/
+#include <Constants.h>
 
-uint16_t V_SLOW_SEP = 5; //mm per second - UP speed
-uint16_t V_SLOW_RET = 10; // Down Speed
-
-
-/******COMMAND LIST*******************/
-const uint8_t ENABLE_MOTOR = 0x00;
-const uint8_t MOVE_UP = 0x01;
-const uint8_t MOVE_DOWN = 0x02;
-const uint8_t DISABLE_MOTOR = 0x03;
-
-/****MOTOR CONSTANTS**********/
-const uint16_t STEPS_PER_REV = 1600;          // Steps per revolution set on the driver
-const uint16_t PULSE_DURATION_1REV_PS = 624U; //if we need 1rev per second.
-const uint16_t HALF_PULSE_DURATION_1REV_PS = 312U;
-const uint16_t MULTIPLIER_DIST_10um_TO_STEPS = 8;
-const double MULTIPLIER_SPEED_1mmps_REVPS = 0.5;
-//Moves 2mm for 1600 steps. 1.25 microns per step
-
-
-uint16_t HPD_SLOW_SEP = HALF_PULSE_DURATION_1REV_PS / (V_SLOW_SEP * MULTIPLIER_SPEED_1mmps_REVPS);
-uint16_t HPD_SLOW_RET = HALF_PULSE_DURATION_1REV_PS / (V_SLOW_RET * MULTIPLIER_SPEED_1mmps_REVPS);
-uint32_t HPD_LOW_LIM = HALF_PULSE_DURATION_1REV_PS * 2;
-
-/*******HARDWARE CONSTANTS************/
-const uint8_t PULSE_PIN = 2;
-const uint8_t DIR_PIN = 4;
-const uint8_t OPTO_PIN = 8;
-const uint8_t ENA_PIN = 7;
-const uint8_t ADDRESS = 0x1A;
+inline void moveStepsConstantAcceleration(uint32_t steps, double &dt_prev, double a){
+    double hpd = 1E6 * dt_prev / 2;
+    for (uint32_t step = 0; step < steps; step++)
+        {
+            PORTD |= 0x04; //sets pulse pin to high
+            delayMicroseconds(hpd);
+            PORTD &= ~(0x04);
+            unsigned long m0 = micros();
+            bool new_loop = true;
+            while ((micros() - m0) < hpd)
+            {
+                if (new_loop)
+                {
+                    dt_prev = dt_prev / (1.0 + (8.0 * a * dt_prev * dt_prev));
+                    hpd = 1E6 * dt_prev / 2;
+                    new_loop = false;
+                }
+            }
+            new_loop = true;
+        }
+}
+inline void moveSteps(uint32_t steps, uint8_t direction){
+    digitalWrite(DIR_PIN, direction);
+    double dt_prev = INITIAL_DT;
+    moveStepsConstantAcceleration(steps/2, dt_prev, ACCELERATION);
+    moveStepsConstantAcceleration(steps/2, dt_prev, -ACCELERATION);
+}
 
 void setup()
 {
     Serial.begin(115200);
-    DDRD = DDRD | B10010100; //Pins 2, 4, and 8 are outputs
+    DDRD = DDRD | B10010100; //Pins 2, 4, and 7 are outputs
     DDRB = DDRB | B00000001; //Pin 8 is output
     digitalWrite(OPTO_PIN, HIGH);
     digitalWrite(ENA_PIN, LOW);
@@ -47,39 +44,60 @@ void loop()
     {
     }
     uint8_t command = Serial.read();
-    if (MOVE_UP == command)
-    {
+    if(command == AGITATE){
         digitalWrite(ENA_PIN, HIGH);
-        digitalWrite(DIR_PIN, HIGH);
+        moveSteps(STEPS_WASH_RANGE, HIGH); //Stage mount inverted
+        moveSteps(STEPS_WASH_RANGE, LOW);
+        digitalWrite(ENA_PIN, LOW);
+    }
+
+    else if(command == SUBMERGE){
+        digitalWrite(ENA_PIN, HIGH);
+        moveSteps(STEPS_SUBMERGE, HIGH); //Stage mount inverted
+        digitalWrite(ENA_PIN, LOW);
+    }
+    else if(command == RAISE){
+        digitalWrite(ENA_PIN, HIGH);
+        moveSteps(STEPS_SUBMERGE, LOW);//Stage mount inverted
+        digitalWrite(ENA_PIN, LOW);
+    }
+
+    else if(command == DATA_WRITE){
         while (Serial.available() < 1)
         {
-            PORTD |= 0x04; //sets pulse pin to high
-            delayMicroseconds(HPD_SLOW_SEP);
-            PORTD &= ~(0x04);
-            delayMicroseconds(HPD_SLOW_SEP);
         }
-        digitalWrite(ENA_PIN, LOW);
-    }
-    else if (MOVE_DOWN == command)
-    {
-        digitalWrite(ENA_PIN, HIGH);
-        digitalWrite(DIR_PIN, LOW);
+        uint8_t byte_lower = Serial.read();
         while (Serial.available() < 1)
         {
-            PORTD |= 0x04; //sets pulse pin to high
-            delayMicroseconds(HPD_SLOW_RET);
-            PORTD &= ~(0x04);
-            delayMicroseconds(HPD_SLOW_RET);
         }
-        digitalWrite(ENA_PIN, LOW);
-    }
-    else if (ENABLE_MOTOR == command)
-    {
-        digitalWrite(ENA_PIN, HIGH);
-    }
-    else if (DISABLE_MOTOR == command)
-    {
-        digitalWrite(ENA_PIN, LOW);
+        uint8_t byte_higher = Serial.read();
+        D_WASH_RANGE = 0x0000 | byte_lower;
+        D_WASH_RANGE |= (byte_higher << 8);
+
+        while (Serial.available() < 1)
+        {
+        }
+        uint8_t acceleration_lower = Serial.read();
+        while (Serial.available() < 1)
+        {
+        }
+        uint8_t acceleration_higher = Serial.read();        
+        uint8_t acceleration = 0x0000 | acceleration_lower;
+        ACCELERATION = static_cast<double>(acceleration | (acceleration_higher << 8));
+
+        while (Serial.available() < 1)
+        {
+        }
+        byte_lower = Serial.read();
+        while (Serial.available() < 1)
+        {
+        }
+        byte_higher = Serial.read();
+        D_SUBMERGE = 0x0000 | byte_lower;
+        D_SUBMERGE |= (byte_higher << 8);
+        
+        STEPS_SUBMERGE = D_SUBMERGE * STEPS_PER_DU;
+        STEPS_WASH_RANGE = D_WASH_RANGE * STEPS_PER_DU; 
     }
     Serial.write(0x01);
 }
