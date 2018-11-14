@@ -27,6 +27,7 @@ DATA_WRITE = b'\x05'
 
 class Agitator(QObject):
     finished_signal = pyqtSignal()
+    status_changed_signal = pyqtSignal(int)
     motor_controller = Serial('/dev/ttyUSB0', 115200)
 
     def setup_values(self, submerge, distance, acceleration, duration):
@@ -38,7 +39,6 @@ class Agitator(QObject):
         self.distance_byte_data = self.distance.to_bytes(2, byteorder='little')
         self.acceleration_byte_data = self.acceleration.to_bytes(2, byteorder='little')
         self.submerge_byte_data = self.submerge.to_bytes(2, byteorder='little')
-        print([self.distance_byte_data,self.acceleration_byte_data])
 
     @pyqtSlot()
     def run(self):
@@ -58,6 +58,7 @@ class Agitator(QObject):
             diff = (time()-starting_time)
             self.motor_controller.write(AGITATE)
             self.motor_controller.read(size=1)
+            self.status_changed_signal.emit(diff*100/self.duration)
         
         self.motor_controller.write(RAISE)
         self.motor_controller.read(size = 1)
@@ -76,7 +77,11 @@ class MainAppWindow(QWidget):
 
         self.initUI()
 
+        self.agitator.status_changed_signal.connect(self.statusUpdateHandle)
+
     def initUI(self):
+        self.percent_complete_label = QLabel(str(0))
+    
         acc_data_hbox = QHBoxLayout()
         acc_data_hbox.addStretch(1)
         accelerationLabel = QLabel("acc")
@@ -142,6 +147,7 @@ class MainAppWindow(QWidget):
         submerge_data_hbox.addStretch(1)
 
         buttonHBox = QHBoxLayout()
+        buttonHBox.addWidget(self.percent_complete_label)
         buttonHBox.addStretch(1)
         self.startButton = QPushButton("Start", self)
         self.cancelButton = QPushButton("Stop", self)
@@ -161,16 +167,21 @@ class MainAppWindow(QWidget):
         self.setLayout(vbox)
         self.startButton.clicked.connect(self.onStartClicked)
         self.cancelButton.clicked.connect(self.onCancelClicked)
-        self.setGeometry(500, 600, 300, 150)
+        self.setGeometry(700, 600, 300, 150)
         self.setWindowTitle('IPA Cleaning test')
         self.show()
 
+    @pyqtSlot()
     def motionFinishedHandle(self):
         global interrupt_flag
         self.agitatorThread.quit()
         interrupt_flag = False
         self.startButton.setEnabled(True)
         self.cancelButton.setEnabled(False)
+
+    @pyqtSlot(int)
+    def statusUpdateHandle(self, percent):
+        self.percent_complete_label.setText(str(percent)+"%")
 
     @pyqtSlot()
     def onStartClicked(self):
@@ -181,8 +192,6 @@ class MainAppWindow(QWidget):
         self.startButton.setEnabled(False)
         # print(int(self.accelerationTextBox.text()))
         # print(self.distanceTextBox.text())
-        print("interrupt-flag")
-        print(interrupt_flag)
         self.agitatorThread.start()
         self.cancelButton.setEnabled(True)
 
