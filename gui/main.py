@@ -1,4 +1,6 @@
 import sys
+import os
+
 from time import time, sleep
 from serial import Serial
 from PyQt5.QtWidgets import (QWidget, QPushButton, QHBoxLayout,
@@ -25,6 +27,10 @@ RAISE = b'\x03'
 AGITATE = b'\x04'
 DATA_WRITE = b'\x05'
 
+beep_duration = 5
+freq = 1760  # Hz
+
+
 class Agitator(QObject):
     finished_signal = pyqtSignal()
     status_changed_signal = pyqtSignal(int)
@@ -42,6 +48,8 @@ class Agitator(QObject):
 
     @pyqtSlot()
     def run(self):
+
+        os.system('play --no-show-progress --null --channels 1 synth %s sine %f' % (1, freq))
         global interrupt_flag
         self.motor_controller.write(DATA_WRITE)
         self.motor_controller.write(self.distance_byte_data)
@@ -62,7 +70,7 @@ class Agitator(QObject):
         
         self.motor_controller.write(RAISE)
         self.motor_controller.read(size = 1)
-
+        os.system('play --no-show-progress --null --channels 1 synth %s sine %f' % (beep_duration, freq))
         self.finished_signal.emit()
 
 
